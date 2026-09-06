@@ -30,10 +30,32 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build debug APK
-        run: ./gradlew :composeApp:assembleDebug --stacktrace
+      - name: Build debug APK (full log saved to file)
+        run: |
+          set -o pipefail
+          ./gradlew :composeApp:assembleDebug --stacktrace --no-configuration-cache 2>&1 | tee gradle-full-log.txt
+
+      - name: Show real error if build failed
+        if: failure()
+        run: |
+          echo "===== LAST 200 LINES OF GRADLE LOG (likely contains the real cause) ====="
+          tail -n 200 gradle-full-log.txt
+          echo "=========================================================================="
+          echo "### ❌ Build failed — see full log below or download the 'gradle-full-log' artifact" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -n 200 gradle-full-log.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload full Gradle log (always, even on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-full-log
+          path: gradle-full-log.txt
+          if-no-files-found: warn
 
       - name: Upload APK artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
