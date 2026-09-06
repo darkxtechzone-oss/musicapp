@@ -28,18 +28,61 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Check project
+        run: |
+          echo "=== PROJECT ROOT ==="
+          pwd
+          echo "=== FILES ==="
+          ls -la
+          echo "=== GRADLE WRAPPER ==="
+          ls -la gradlew
+          echo "=== JAVA VERSION ==="
+          java -version
+          echo "=== GRADLE VERSION ==="
+          ./gradlew --version
 
       - name: Make Gradle executable
         run: chmod +x ./gradlew
 
       - name: Build Android Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          set -o pipefail
+          ./gradlew assembleDebug \
+            --stacktrace \
+            --info \
+            --console=plain \
+            2>&1 | tee gradle-build.log
+
+      - name: Show Gradle error
+        if: failure()
+        run: |
+          echo ""
+          echo "========================================"
+          echo "       DARKX MUSIC BUILD ERROR"
+          echo "========================================"
+          echo ""
+          echo "=== LAST 200 LINES OF GRADLE LOG ==="
+          tail -n 200 gradle-build.log || true
+          echo ""
+          echo "=== GRADLE FAILURE SUMMARY ==="
+          grep -A 20 -B 5 -E \
+            "FAILURE:|What went wrong:|Caused by:|Could not|Execution failed" \
+            gradle-build.log || true
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DarkX-Music-build-log
+          path: gradle-build.log
+          if-no-files-found: ignore
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: DarkX-Music-debug
