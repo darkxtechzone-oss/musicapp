@@ -23,6 +23,9 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Make Gradle executable
+        run: chmod +x ./gradlew
+
       - name: Setup JDK
         uses: actions/setup-java@v4
         with:
@@ -36,17 +39,18 @@ jobs:
         run: |
           echo "=== PROJECT ROOT ==="
           pwd
+
           echo "=== FILES ==="
           ls -la
+
           echo "=== GRADLE WRAPPER ==="
           ls -la gradlew
+
           echo "=== JAVA VERSION ==="
           java -version
+
           echo "=== GRADLE VERSION ==="
           ./gradlew --version
-
-      - name: Make Gradle executable
-        run: chmod +x ./gradlew
 
       - name: Build Android Debug APK
         run: |
@@ -65,8 +69,10 @@ jobs:
           echo "       DARKX MUSIC BUILD ERROR"
           echo "========================================"
           echo ""
+
           echo "=== LAST 200 LINES OF GRADLE LOG ==="
           tail -n 200 gradle-build.log || true
+
           echo ""
           echo "=== GRADLE FAILURE SUMMARY ==="
           grep -A 20 -B 5 -E \
