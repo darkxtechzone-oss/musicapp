@@ -1,0 +1,465 @@
+package app.it.fast4x.rimusic.ui.screens.history
+
+import androidx.annotation.OptIn
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.util.fastDistinctBy
+import androidx.media3.common.util.UnstableApi
+import androidx.navigation.NavController
+import app.kreate.android.R
+import app.it.fast4x.compose.persist.persist
+import app.it.fast4x.compose.persist.persistList
+import it.fast4x.innertube.YtMusic
+import it.fast4x.innertube.requests.HistoryPage
+import app.it.fast4x.rimusic.Database
+import app.it.fast4x.rimusic.EXPLICIT_PREFIX
+import app.it.fast4x.rimusic.LocalPlayerAwareWindowInsets
+import app.it.fast4x.rimusic.LocalPlayerServiceBinder
+import app.it.fast4x.rimusic.colorPalette
+import app.it.fast4x.rimusic.typography
+import app.it.fast4x.rimusic.enums.HistoryType
+import app.it.fast4x.rimusic.enums.NavigationBarPosition
+import app.it.fast4x.rimusic.models.Event
+import app.it.fast4x.rimusic.models.Song
+import app.it.fast4x.rimusic.thumbnailShape
+import app.it.fast4x.rimusic.ui.components.ButtonsRow
+import app.it.fast4x.rimusic.ui.components.LocalMenuState
+import app.it.fast4x.rimusic.ui.components.SwipeablePlaylistItem
+import app.it.fast4x.rimusic.ui.components.themed.HeaderWithIcon
+import app.it.fast4x.rimusic.ui.components.themed.Loader
+import app.it.fast4x.rimusic.ui.components.themed.NonQueuedMediaItemMenuLibrary
+import app.it.fast4x.rimusic.ui.components.themed.Title
+import app.it.fast4x.rimusic.extensions.youtubelogin.YtmSessionApi
+import app.it.fast4x.rimusic.ui.screens.settings.isYouTubeLoggedIn
+import app.it.fast4x.rimusic.ui.styling.Dimensions
+import app.it.fast4x.rimusic.ui.styling.favoritesIcon
+import app.it.fast4x.rimusic.extensions.youtubelogin.YouTubeRequestThrottler
+import app.it.fast4x.rimusic.extensions.youtubelogin.YouTubeSessionStore
+import app.it.fast4x.rimusic.utils.addNext
+import app.it.fast4x.rimusic.utils.asMediaItem
+import app.it.fast4x.rimusic.utils.asSong
+import app.it.fast4x.rimusic.cleanPrefix
+import app.it.fast4x.rimusic.utils.disableScrollingTextKey
+import app.it.fast4x.rimusic.utils.enqueue
+import app.it.fast4x.rimusic.utils.forcePlay
+import app.it.fast4x.rimusic.utils.historyTypeKey
+import app.it.fast4x.rimusic.utils.parentalControlEnabledKey
+import app.it.fast4x.rimusic.utils.rememberPreference
+import app.it.fast4x.rimusic.utils.secondary
+import app.it.fast4x.rimusic.utils.semiBold
+import app.it.fast4x.rimusic.utils.ytAccountChannelHandleKey
+import app.it.fast4x.rimusic.utils.ytCookieKey
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withTimeout
+import app.kreate.android.me.knighthat.component.tab.Search
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import timber.log.Timber
+
+@kotlin.OptIn(ExperimentalTextApi::class)
+@OptIn(UnstableApi::class)
+@ExperimentalFoundationApi
+@ExperimentalAnimationApi
+@Composable
+fun HistoryList(
+    navController: NavController
+) {
+    val context = LocalContext.current
+    val binder = LocalPlayerServiceBinder.current
+    val menuState = LocalMenuState.current
+    val lazyListState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    val parentalControlEnabled by rememberPreference(parentalControlEnabledKey, false)
+    val disableScrollingText by rememberPreference(disableScrollingTextKey, false)
+    val activeYouTubeCookie by rememberPreference(ytCookieKey, "")
+    val activeYouTubeAccountHandle by rememberPreference(ytAccountChannelHandleKey, "")
+    val activeYouTubeSession = YouTubeSessionStore.getCurrentSession(context)
+    val activeYouTubeSessionId = activeYouTubeSession?.sessionId.orEmpty()
+    val activeYouTubeAccountIdentity = listOf(
+        activeYouTubeSessionId,
+        activeYouTubeSession?.authUser.orEmpty(),
+        activeYouTubeSession?.pageId.orEmpty(),
+        activeYouTubeAccountHandle
+    ).joinToString("|")
+
+    val search = Search(lazyListState)
+
+    val localHistoryStats by remember {
+        Database.eventTable
+            .findCompleteSongHistory()
+            .distinctUntilChanged()
+            .map { stats ->
+                stats.filter {
+                    !parentalControlEnabled || !it.song.title.startsWith(EXPLICIT_PREFIX, true)
+                }
+            }
+    }.collectAsState(emptyList(), Dispatchers.IO)
+    val buttonsList = mutableListOf(HistoryType.History to stringResource(R.string.history))
+    buttonsList += HistoryType.YTMHistory to stringResource(R.string.yt_history)
+
+    var historyType by rememberPreference(historyTypeKey, HistoryType.History)
+
+    var isLocalLoading by remember { mutableStateOf(true) }
+    var isYTMLoading by remember { mutableStateOf(false) }
+    var ytmHistoryLoadError by remember { mutableStateOf<String?>(null) }
+    var ytmHistorySongs by remember { mutableStateOf<List<androidx.media3.common.MediaItem>>(emptyList()) }
+    var ytmHistoryCachedSongs by persistList<Song>("home/history/ytmHistorySongs")
+    var ytmHistoryCachedIdentity by persist("home/history/ytmHistoryIdentity", "")
+
+    LaunchedEffect(localHistoryStats) {
+        if (localHistoryStats.isNotEmpty()) {
+            isLocalLoading = false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        delay(1500)
+        isLocalLoading = false
+    }
+
+    var historyPage by persist<Result<HistoryPage>>("home/history/pageResult")
+    LaunchedEffect(historyType, activeYouTubeCookie, activeYouTubeAccountIdentity) {
+        if (historyType == HistoryType.YTMHistory && isYouTubeLoggedIn()) {
+            ytmHistoryLoadError = null
+            if (ytmHistoryCachedIdentity == activeYouTubeAccountIdentity && ytmHistoryCachedSongs.isNotEmpty()) {
+                ytmHistorySongs = ytmHistoryCachedSongs.map(Song::asMediaItem)
+                isYTMLoading = false
+                return@LaunchedEffect
+            }
+
+            isYTMLoading = true
+            if (ytmHistoryCachedIdentity != activeYouTubeAccountIdentity) {
+                ytmHistorySongs = emptyList()
+                historyPage = null
+            }
+            val currentSession = YouTubeSessionStore.applyCurrentSession(context)
+                ?.let { YtmSessionApi.ensureScopedSession(it) }
+            val requiresScopedSessionHistory = !currentSession?.pageId.isNullOrBlank()
+
+            val sessionHistory = currentSession?.cookie
+                ?.takeIf { it.isNotBlank() }
+                ?.let { cookie ->
+                    runCatching {
+                        withTimeout(20_000L) {
+                            YtmSessionApi.fetchHistory(
+                                cookies = cookie,
+                                authUser = currentSession.authUser.ifBlank { null },
+                                pageId = currentSession.pageId.ifBlank { null }
+                            ).getOrThrow()
+                        }
+                    }.getOrNull()
+                }
+
+            if (!sessionHistory.isNullOrEmpty()) {
+                val normalizedHistorySongs = sessionHistory
+                    .filter { it.videoId.isNotBlank() && it.title.isNotBlank() }
+                    .map { remoteSong ->
+                        Song(
+                            id = remoteSong.id.ifBlank { remoteSong.videoId },
+                            title = remoteSong.title,
+                            artistsText = remoteSong.artistsText.ifBlank { remoteSong.artist },
+                            thumbnailUrl = remoteSong.thumbnailUrl.ifBlank { remoteSong.thumbnail },
+                            durationText = remoteSong.durationText.ifBlank { remoteSong.duration }
+                        )
+                    }
+                    .filter { it.id.isNotBlank() }
+                    .distinctBy { it.id }
+                ytmHistoryCachedIdentity = activeYouTubeAccountIdentity
+                ytmHistoryCachedSongs = normalizedHistorySongs
+                ytmHistorySongs = normalizedHistorySongs.map(Song::asMediaItem)
+            } else if (requiresScopedSessionHistory) {
+                ytmHistorySongs = emptyList()
+                ytmHistoryLoadError = "No history returned for the selected YouTube account."
+            } else {
+                historyPage = runCatching {
+                    withTimeout(20_000L) {
+                        YouTubeRequestThrottler.run {
+                            YtMusic.getHistory()
+                        }.getOrThrow()
+                    }
+                }.onFailure {
+                    Timber.e(it, "HistoryList failed to fetch YTM history")
+                    ytmHistoryLoadError = it.message
+                }
+                if (historyPage?.isFailure == true) {
+                    ytmHistorySongs = emptyList()
+                }
+            }
+            isYTMLoading = false
+        }
+    }
+
+    Column (
+        modifier = Modifier
+            .background(colorPalette().background0)
+            .fillMaxHeight()
+            .fillMaxWidth(
+                if( NavigationBarPosition.Right.isCurrent() )
+                    Dimensions.contentWidthRightBar
+                else
+                    1f
+            )
+    ) {
+        HeaderWithIcon(
+            title = stringResource(R.string.history),
+            iconId = R.drawable.history,
+            enabled = false,
+            showIcon = false,
+            modifier = Modifier,
+            onClick = {}
+        )
+
+        Row(
+            modifier = Modifier
+                .padding(start = 12.dp, end = 12.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ButtonsRow(
+                chips = buttonsList,
+                currentValue = historyType,
+                onValueUpdate = { historyType = it },
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(
+                onClick = { search.isVisible = !search.isVisible },
+                modifier = Modifier.padding(start = 8.dp)
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.search_circle),
+                    contentDescription = stringResource(R.string.search),
+                    tint = colorPalette().favoritesIcon
+                )
+            }
+        }
+
+        AnimatedVisibility(
+            visible = search.isVisible,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            search.SearchBar(this@Column)
+        }
+
+        val isLoading = when (historyType) {
+            HistoryType.History -> isLocalLoading && localHistoryStats.isEmpty()
+            HistoryType.YTMHistory -> isYTMLoading || (historyPage == null && ytmHistorySongs.isEmpty() && isYouTubeLoggedIn())
+        }
+
+        if (isLoading) {
+            Box(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Loader()
+            }
+        } else {
+            LazyColumn(
+                state = lazyListState,
+                contentPadding = LocalPlayerAwareWindowInsets.current
+                    .only(WindowInsetsSides.Vertical + WindowInsetsSides.End).asPaddingValues(),
+                modifier = Modifier
+                    .background(colorPalette().background0)
+                    .fillMaxSize()
+            ) {
+                if (historyType == HistoryType.History) {
+                    val filteredHistory = localHistoryStats.filter { stat ->
+                        stat.song.title.contains(search.inputValue, ignoreCase = true) ||
+                            (stat.song.artistsText ?: "").contains(search.inputValue, ignoreCase = true)
+                    }
+
+                    if (filteredHistory.isNotEmpty()) {
+                        stickyHeader {
+                            Title(
+                                title = stringResource(R.string.history),
+                                modifier = Modifier.background(
+                                    color = colorPalette().background3,
+                                    shape = thumbnailShape()
+                                )
+                            )
+                        }
+                    }
+
+                    items(
+                        items = filteredHistory,
+                        key = { it.song.id }
+                    ) { stat ->
+                        SwipeablePlaylistItem(
+                            mediaItem = stat.song.asMediaItem,
+                            onPlayNext = { binder?.player?.addNext(stat.song.asMediaItem) },
+                            onEnqueue = { binder?.player?.enqueue(stat.song.asMediaItem) }
+                        ) {
+                            app.kreate.android.me.knighthat.component.SongItem(
+                                song = stat.song,
+                                navController = navController,
+                                modifier = Modifier,
+                                trailingContent = {
+                                    Text(
+                                        text = stringResource(
+                                            R.string.rewind_card_song_plays_meta,
+                                            stat.playCount
+                                        ),
+                                        style = typography().xxs.semiBold.secondary,
+                                        modifier = Modifier.padding(end = 12.dp)
+                                    )
+                                },
+                                onClick = { binder?.player?.forcePlay(stat.song.asMediaItem) }
+                            )
+                        }
+                    }
+                }
+                if (historyType == HistoryType.YTMHistory) {
+                    if (ytmHistorySongs.isNotEmpty()) {
+                        stickyHeader {
+                            Title(
+                                title = stringResource(R.string.history),
+                                modifier = Modifier.background(
+                                    color = colorPalette().background3,
+                                    shape = thumbnailShape()
+                                )
+                            )
+                        }
+
+                        itemsIndexed(
+                            items = ytmHistorySongs.filter { mediaItem ->
+                                (mediaItem.mediaMetadata.title ?: "").contains(search.inputValue, ignoreCase = true) ||
+                                    (mediaItem.mediaMetadata.artist ?: "").contains(search.inputValue, ignoreCase = true)
+                            },
+                            key = { index, mediaItem -> "${mediaItem.mediaId.ifBlank { "ytm_history" }}_$index" }
+                        ) { _, mediaItem ->
+                            SwipeablePlaylistItem(
+                                mediaItem = mediaItem,
+                                onPlayNext = { binder?.player?.addNext(mediaItem) },
+                                onEnqueue = { binder?.player?.enqueue(mediaItem) }
+                            ) {
+                                app.kreate.android.me.knighthat.component.SongItem(
+                                    song = mediaItem.asSong,
+                                    navController = navController,
+                                    modifier = Modifier,
+                                    onClick = { binder?.player?.forcePlay(mediaItem) },
+                                    onLongClick = {
+                                        menuState.display {
+                                            NonQueuedMediaItemMenuLibrary(
+                                                navController = navController,
+                                                mediaItem = mediaItem,
+                                                onDismiss = menuState::hide,
+                                                disableScrollingText = disableScrollingText
+                                            )
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    if (ytmHistorySongs.isEmpty()) historyPage?.getOrNull()?.sections?.forEach { section ->
+                        val historyItems = section.songs
+                            .map { it.asMediaItem }
+                            .filter { it.mediaId.isNotBlank() }
+                            .distinctBy { it.mediaId }
+                            .filter { mediaItem ->
+                                cleanPrefix(mediaItem.mediaMetadata.title?.toString().orEmpty())
+                                    .contains(search.inputValue, ignoreCase = true) ||
+                                    cleanPrefix(mediaItem.mediaMetadata.artist?.toString().orEmpty())
+                                        .contains(search.inputValue, ignoreCase = true)
+                            }
+
+                        if (historyItems.isEmpty()) return@forEach
+
+                        stickyHeader {
+                            Title(
+                                title = section.title,
+                                modifier = Modifier.background(
+                                    color = colorPalette().background3,
+                                    shape = thumbnailShape()
+                                )
+                            )
+                        }
+
+                        itemsIndexed(
+                            items = historyItems,
+                            key = { index, mediaItem -> "${mediaItem.mediaId.ifBlank { "ytm_history_section" }}_$index" }
+                        ) { _, mediaItem ->
+                            SwipeablePlaylistItem(
+                                mediaItem = mediaItem,
+                                onPlayNext = {
+                                    binder?.player?.addNext(mediaItem)
+                                },
+                                onEnqueue = {
+                                    binder?.player?.enqueue(mediaItem)
+                                }
+                            ) {
+                                app.kreate.android.me.knighthat.component.SongItem(
+                                    song = mediaItem.asSong,
+                                    navController = navController,
+                                    modifier = Modifier,
+
+                                    onClick = {
+                                        binder?.player?.forcePlay(mediaItem)
+                                    },
+                                    onLongClick = {
+                                        menuState.display {
+                                            NonQueuedMediaItemMenuLibrary(
+                                                navController = navController,
+                                                mediaItem = mediaItem,
+                                                onDismiss = menuState::hide,
+                                                disableScrollingText = disableScrollingText
+                                            )
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        LaunchedEffect(ytmHistoryLoadError) {
+            ytmHistoryLoadError?.let { message ->
+                scope.launch {
+                    app.kreate.android.me.knighthat.utils.Toaster.e(message.ifBlank { "Failed to load YouTube Music history" })
+                }
+            }
+        }
+    }
+}
