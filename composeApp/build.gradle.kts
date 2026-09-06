@@ -120,7 +120,6 @@ kotlin {
     implementation(libs.compose.runtime.livedata)
     implementation(libs.compose.activity)
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
-    implementation(projects.betterlyrics)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.datasource.okhttp)
     implementation(libs.androidx.appcompat)
